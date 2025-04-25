@@ -1,0 +1,22 @@
+# Core AI & Agents
+crewai>=0.30.0,<0.31.0 # Użyj najnowszej stabilnej wersji
+crewai-tools
+langchain-google-genai # Dla integracji Gemini API
+python-dotenv
+
+# Supabase
+supabase>=2.0.0,<3.0.0 # Oficjalny klient Supabase
+
+# Web Frameworks & Tools (jeśli agenci mają je instalować/zarządzać)
+# Zależności dla projektów będą w ich własnych requirements.txt / package.json
+
+# Testing
+pytest
+pytest-playwright # Dla testów E2E
+
+# Utilities
+requests
+GitPython # Do interakcji z Git z poziomu Pythona
+discord-webhook # Do wysyłania powiadomień
+
+# Należy dodać inne potrzebne biblioteki
