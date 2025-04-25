@@ -4,3 +4,5 @@ projects/
 *.pyc
 __pycache__/
 venv/
+*.log
+n8n_data/
