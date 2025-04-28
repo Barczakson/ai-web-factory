@@ -1,0 +1,29 @@
+version: '3.8'
+services:
+  db:
+    image: supabase/postgres:15.1.0.147
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./supabase/docker/volumes/db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  studio:
+    image: supabase/studio:20240422-e76d6e8
+    ports:
+      - "54323:3000"
+    depends_on:
+      - db
+    environment:
+      - SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp2c3R3ZW5ia2V5ZXdmYXdzdnRjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDU1OTY3NTksImV4cCI6MjA2MTE3Mjc1OX0.S7KR5S4O_BoOBbI35diZAR7BgN3gHsEs4QUSJg7PFFM
+
+      - SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp2c3R3ZW5ia2V5ZXdmYXdzdnRjIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0NTU5Njc1OSwiZXhwIjoyMDYxMTcyNzU5fQ.Wn_Dsnf5I-RXa7l1kEDyjz2L6E8SSCpMlEdC26n6DI4
+
+      - SUPABASE_URL=http://localhost:54323
+volumes:
+  db:

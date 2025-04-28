@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "devDependencies": {
+    "eslint": "^9.25.1",
+    "supabase": "^2.22.8",
+    "typescript": "^5.8.3"
+  }
+}

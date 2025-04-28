@@ -1,0 +1,4 @@
+# tasks.yaml
+tasks:
+  - description: Dodaj przełącznik trybu ciemnego
+    agent: Project Editor

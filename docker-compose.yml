@@ -1,0 +1,32 @@
+services:
+  app:
+    image: n8n-python
+    volumes:
+      - "C:/GUŁAG/ai-web-factory:/app"
+    # secrets:
+    #   - gemini_api_key
+    environment:
+      # Zmienne SUPABASE_URL i SUPABASE_SERVICE_KEY powinny być dostarczone np. przez plik .env
+      # lub bezpośrednio w komendzie docker-compose up.
+      # Usunięto placeholderowe wartości.
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - GOOGLE_API_KEY=AIzaSyBDBRdQVCKPE8sAZ92PiX6vJp1DAjLIv7Y
+    working_dir: /app
+    entrypoint: tail -f /dev/null
+    # Zmieniono komendę startową, aby uruchomić skrypt z wymaganym argumentem --project
+
+  prompt_panel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - "C:/GUŁAG/ai-web-factory:/app"
+    working_dir: /app/prompt_panel
+    command: [ "python", "app.py" ]
+
+secrets:
+  gemini_api_key:
+    file: ./secrets/gemini_key.txt

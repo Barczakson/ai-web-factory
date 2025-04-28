@@ -1,0 +1,47 @@
+{
+  "meta": {
+    "instanceId": "6e324ed61975eadea0e00c00a99e2ec45330213a7a795a37570388b4075d708d"
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "8f9e7a4d-3b7c-4d8a-9f8e-7a4d3b7c8d8a", // ID może być inne
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        0
+      ],
+      "webhookId": "project-edit-webhook-id" // ID webhooka zostanie wygenerowane
+    },
+    {
+      "parameters": {
+        "command": "python3 /app/generate_project.py --project {{ $json.body.project_name }} --edit --changes \"{{ $json.body.changes }}\"",
+        "options": {}
+      },
+      "id": "b63d4ed7-1e5e-4e1b-9a89-d1bcb08584bf", // ID może być inne
+      "name": "Execute Edit Script",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Execute Edit Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+   "pinData": {}
+}

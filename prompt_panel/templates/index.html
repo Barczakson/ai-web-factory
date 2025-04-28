@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>AI Web Factory Prompt Panel</title>
+</head>
+
+<body>
+    <h1>AI Web Factory Prompt Panel</h1>
+    <form action="/run_script" method="post">
+        <div>
+            <label for="project">Project Name:</label>
+            <input type="text" id="project" name="project">
+        </div>
+        <div>
+            <label for="framework">Framework:</label>
+            <input type="text" id="framework" name="framework">
+        </div>
+        <div>
+            <label for="features">Features:</label>
+            <input type="text" id="features" name="features">
+        </div>
+        <div>
+            <label for="edit">Edit (Project Name):</label>
+            <input type="text" id="edit" name="edit">
+        </div>
+        <div>
+            <label for="changes">Changes:</label>
+            <textarea id="changes" name="changes"></textarea>
+        </div>
+        <button type="submit">Run Script</button>
+    </form>
+</body>
+
+</html>
