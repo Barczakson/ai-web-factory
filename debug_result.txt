@@ -1,0 +1,248 @@
+--- index.html ---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supabase ToDo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>Supabase ToDo</h1>
+        <button id="theme-toggle">Toggle Dark Mode</button>
+    </header>
+
+    <main>
+        <section class="add-todo">
+            <h2>Add New ToDo</h2>
+            <input type="text" id="new-todo-text" placeholder="What needs to be done?">
+            <button id="add-todo-btn">Add ToDo</button>
+        </section>
+
+        <section class="todo-list">
+            <h2>My ToDos</h2>
+            <ul id="todos">
+                <!-- ToDos will be loaded here by script.js -->
+            </ul>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2023 Supabase ToDo</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
+--- style.css ---
+/* Basic Reset */
+body {
+    margin: 0;
+    font-family: sans-serif;
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Light Mode (Default) */
+body {
+    background-color: #f4f4f4;
+    color: #333;
+}
+
+header {
+    background-color: #fff;
+    color: #333;
+    padding: 1rem;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+main {
+    max-width: 800px;
+    margin: 20px auto;
+    padding: 20px;
+    background-color: #fff;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border-radius: 8px;
+}
+
+.add-todo, .todo-list {
+    margin-bottom: 20px;
+}
+
+input[type="text"] {
+    padding: 10px;
+    margin-right: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    width: calc(100% - 130px); /* Adjust based on button width/margin */
+}
+
+button {
+    padding: 10px 15px;
+    background-color: #5cb85c;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+button:hover {
+    background-color: #4cae4c;
+}
+
+ul {
+    list-style: none;
+    padding: 0;
+}
+
+li {
+    background-color: #eee;
+    padding: 10px;
+    margin-bottom: 5px;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+footer {
+    text-align: center;
+    padding: 1rem;
+    background-color: #fff;
+    color: #333;
+    box-shadow: 0 -2px 4px rgba(0,0,0,0.1);
+    margin-top: 20px;
+}
+
+/* Dark Mode Styles */
+body.dark-mode {
+    background-color: #1e1e1e;
+    color: #eee;
+}
+
+body.dark-mode header {
+    background-color: #2d2d2d;
+    color: #eee;
+}
+
+body.dark-mode main {
+    background-color: #2d2d2d;
+    color: #eee;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+body.dark-mode input[type="text"] {
+    background-color: #3c3c3c;
+    color: #eee;
+    border-color: #555;
+}
+
+body.dark-mode button {
+    background-color: #4a90e2; /* A different button color for dark mode */
+}
+
+body.dark-mode button:hover {
+    background-color: #3a80d2;
+}
+
+body.dark-mode ul li {
+    background-color: #3c3c3c;
+    color: #eee;
+}
+
+body.dark-mode footer {
+    background-color: #2d2d2d;
+    color: #eee;
+}
+
+#theme-toggle {
+    background-color: #007bff;
+    color: white;
+}
+
+#theme-toggle:hover {
+     background-color: #0056b3;
+}
+
+body.dark-mode #theme-toggle {
+    background-color: #6c757d;
+}
+
+body.dark-mode #theme-toggle:hover {
+     background-color: #5a6268;
+}
+
+--- script.js ---
+document.addEventListener('DOMContentLoaded', () => {
+    const themeToggleBtn = document.getElementById('theme-toggle');
+    const body = document.body;
+    const localStorageKey = 'theme'; // Key for local storage
+
+    // Check local storage for saved theme preference
+    const savedTheme = localStorage.getItem(localStorageKey);
+    if (savedTheme) {
+        body.classList.add(savedTheme);
+    } else {
+        // Default to light mode if no preference is saved
+        body.classList.add('light-mode'); // Explicitly add light-mode if needed, though it's the default
+    }
+
+    // Toggle theme on button click
+    themeToggleBtn.addEventListener('click', () => {
+        if (body.classList.contains('dark-mode')) {
+            body.classList.remove('dark-mode');
+            body.classList.add('light-mode');
+            localStorage.setItem(localStorageKey, 'light-mode');
+        } else {
+            body.classList.remove('light-mode'); // Remove light-mode class explicitly
+            body.classList.add('dark-mode');
+            localStorage.setItem(localStorageKey, 'dark-mode');
+        }
+    });
+
+    // --- Basic ToDo App Placeholder ---
+    // (The actual Supabase logic would go here)
+    const newTodoInput = document.getElementById('new-todo-text');
+    const addTodoBtn = document.getElementById('add-todo-btn');
+    const todoListUl = document.getElementById('todos');
+
+    // Simple function to add a placeholder todo item
+    function addPlaceholderTodo() {
+        const text = newTodoInput.value.trim();
+        if (text) {
+            const li = document.createElement('li');
+            li.textContent = text;
+            // Add a placeholder delete button
+            const deleteBtn = document.createElement('button');
+            deleteBtn.textContent = 'Delete';
+             // Simple delete functionality for placeholder
+            deleteBtn.addEventListener('click', () => {
+                li.remove();
+            });
+            li.appendChild(deleteBtn);
+            todoListUl.appendChild(li);
+            newTodoInput.value = ''; // Clear input
+        }
+    }
+
+    // Add event listener for placeholder button
+    addTodoBtn.addEventListener('click', addPlaceholderTodo);
+
+    // Allow adding placeholder with Enter key
+    newTodoInput.addEventListener('keypress', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault(); // Prevent form submission if inside a form
+            addPlaceholderTodo();
+        }
+    });
+
+     // Initial load of placeholder todos (optional)
+     // Example: addPlaceholderTodo("Learn Dark Mode");
+     // Example: addPlaceholderTodo("Integrate Supabase");
+});
+---

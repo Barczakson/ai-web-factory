@@ -1,0 +1,4 @@
+# agents.yaml
+agents:
+  - role: Project Editor
+    goal: Edycja plików projektu

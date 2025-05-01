@@ -1,0 +1,110 @@
+{
+  "name": "Project Edit Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "project-edit",
+        "httpMethod": "POST",
+        "responseMode": "onReceived"
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "command": "python3 /app/generate_project.py --project \"{{ $json['project_name'] }}\" --edit --changes \"{{ $json['changes'] }}\""
+      },
+      "name": "Execute Command",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://jvstwenbkeyewfawsvtc.supabase.co/rest/v1/project_generations",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp2c3R3ZW5ia2V5ZXdmYXdzdnRjIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0NTU5Njc1OSwiZXhwIjoyMDYxMTcyNzU5fQ.Wn_Dsnf5I-RXa7l1kEDyjz2L6E8SSCpMlEdC26n6DI4"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp2c3R3ZW5ia2V5ZXdmYXdzdnRjIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0NTU5Njc1OSwiZXhwIjoyMDYxMTcyNzU5fQ.Wn_Dsnf5I-RXa7l1kEDyjz2L6E8SSCpMlEdC26n6DI4"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "body": "{\"project_name\": \"{{ $json['project_name'] }}\", \"status\": \"{{ $json['status'] }}\", \"features\": \"{{ $json['features'] }}\", \"created_at\": \"{{ $now }}\"}"
+      },
+      "name": "Save to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://discord.com/api/webhooks/1365367977591177226/f3wF46dygFfDJGrST5MSobEJZBWeuGWZBNLoWF9SlXZZVSjsj-24sUANz6OGbxo1EuPE",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "body": "{\"content\": \"Project {{ $json['project_name'] }} updated with changes: {{ $json['changes'] }}\"}"
+      },
+      "name": "Notify Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [900, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Execute Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Command": {
+      "main": [
+        [
+          {
+            "node": "Save to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Notify Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
