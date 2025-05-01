@@ -6,6 +6,8 @@ import logging
 import time
 import requests
 import yaml
+import spacy # Import spacy
+import redis # Import redis
 
 # Konfiguracja logowania
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,8 +29,10 @@ import os
 # Ustaw domyślny model i klucz API dla litellm, nawet jeśli agenci używają ChatGoogleGenerativeAI
 # Może to zapobiec błędom, jeśli CrewAI/mem0 próbuje użyć litellm wewnętrznie
 litellm.set_verbose = True # Włącz szczegółowe logowanie litellm dla debugowania
-litellm.model = "gemini-1.5-flash" # Ustaw domyślny model
+litellm.model = "gemini/gemini-2.0-flash-thinking-exp-01-21" # Ustaw domyślny model
 litellm.api_key = os.getenv("GOOGLE_API_KEY") # Ustaw domyślny klucz API
+litellm.cache = True # Enable API response caching
+litellm.max_tokens = 128000 # Set context window for large projects
 
 
 # Debugging zmiennych środowiskowych
@@ -90,7 +94,7 @@ def create_supabase_table(table_name, schema):
     # Handles quoted identifiers and types with parentheses
     # Updated regex to be more robust
     col_def_pattern = re.compile(r'^[\s]*["`]?([\w]+)["`]?[\s]+([\w\(\),]+)[\s]*(.*)$')
-
+    
     for col_def in schema:
         col_def = col_def.strip()
         if not col_def:
@@ -206,6 +210,15 @@ AGENT_CLASS_MAP = {
     'Code Improvement Specialist': SelfImproveAgent, # Imported class
 }
 
+def get_temperature_for_role(role):
+    """Returns temperature based on agent role for dynamic control."""
+    if role in ['Code Generator', 'Code Reviewer']:
+        return 0.3  # Lower temperature for precision
+    elif role == 'Project Editor':
+        return 0.7  # Higher temperature for creativity
+    else:
+        return 0.5  # Default temperature
+
 def fetch_and_parse_sonar_results(project_name, sonar_url, sonar_token=None):
     """
     Fetches SonarQube analysis results (issues) for a given project and parses them.
@@ -257,22 +270,23 @@ def fetch_and_parse_sonar_results(project_name, sonar_url, sonar_token=None):
     return all_issues
 
 
-def main():
+def main(nlp_pl, nlp_en, redis_client): # Add nlp_pl, nlp_en, and redis_client as parameters
     parser = argparse.ArgumentParser(description="Generate or edit a project.")
-    parser.add_argument("--project", required=True, help="Name of the project")
+    parser.add_argument("--project", help="Name of the project") # Make project optional here, required by parser logic
     parser.add_argument("--framework", help="Framework to use (e.g., Next.js, Flask)")
     parser.add_argument("--features", help="Comma-separated list of features (e.g., Uwierzytelnie Supabase, tabela todos)")
     parser.add_argument("--edit", action="store_true", help="Edit an existing project")
     parser.add_argument("--changes", help="Description of changes to implement")
     parser.add_argument("--config", help="Path to a JSON configuration file") # Dodajemy argument --config
     parser.add_argument("--prompt", required=True, help="Natural language prompt or strict format (e.g., '--project TodoApp --framework Next.js --features Supabase')")
+    parser.add_argument("--no-redis", action="store_true", help="Disable Redis caching") # Add --no-redis argument
     args = parser.parse_args()
 
     logger.info(f"Processing prompt: {args.prompt}")
 
     # Parser języka naturalnego
-    def parse_natural_prompt(prompt):
-        prompt = prompt.lower().strip()
+    def parse_natural_prompt(prompt, nlp_pl, nlp_en):
+        prompt_lower = prompt.lower().strip()
         result = {
             "intent": None,  # generate, edit, deploy, test
             "project": None,
@@ -281,55 +295,11 @@ def main():
             "platform": None
         }
 
-        # Słowa kluczowe dla intencji
-        generate_keywords = ["stwórz", "utwórz", "generuj", "create", "build", "make"]
-        edit_keywords = ["dodaj", "edytuj", "modyfikuj", "rozszerz", "add", "edit", "modify", "extend"]
-        deploy_keywords = ["wdróż", "deploy", "przygotuj do wdrożenia", "host"]
-        test_keywords = ["testuj", "test", "wygeneruj testy", "sprawdź jakość"]
-
-        # Rozpoznanie intencji
-        if any(keyword in prompt for keyword in generate_keywords):
-            result["intent"] = "generate"
-        elif any(keyword in prompt for keyword in edit_keywords):
-            result["intent"] = "edit"
-        elif any(keyword in prompt for keyword in deploy_keywords):
-            result["intent"] = "deploy"
-        elif any(keyword in prompt for keyword in test_keywords):
-            result["intent"] = "test"
-
-        # Wyciągnięcie nazwy projektu
-        project_match = re.search(r"(?:dla|projektu|projekt|to|for)\s+([a-zA-Z0-9_-]+)", prompt)
-        if project_match:
-            result["project"] = project_match.group(1).capitalize()
-
-        # Rozpoznanie frameworka
-        frameworks = ["next.js", "flask", "react", "django", "fastapi"]
-        for framework in frameworks:
-            if framework in prompt:
-                result["framework"] = framework.capitalize()
-                break
-
-        # Rozpoznanie platformy wdrożeniowej
-        platforms = ["vercel", "render", "heroku", "netlify"]
-        for platform in platforms:
-            if platform in prompt:
-                result["platform"] = platform.capitalize()
-                break
-
-        # Wyciągnięcie funkcji
-        feature_keywords = [
-            "supabase", "uwierzytelnia", "autentykacja", "dashboard", "api",
-            "moduł notatek", "system płatności", "integracja stripe", "testy playwright"
-        ]
-        for feature in feature_keywords:
-            if feature in prompt:
-                result["features"].append(feature.capitalize())
-
-        # Obsługa ścisłego formatu (np. --project)
-        if prompt.startswith("--"):
+        # Obsługa ścisłego formatu (np. --project) - priorytet
+        if prompt_lower.startswith("--"):
             try:
-                parts = prompt.split()
-                result["intent"] = "generate" if "dodaj" not in prompt and "add" not in prompt else "edit"
+                parts = prompt_lower.split()
+                result["intent"] = "generate" if "dodaj" not in prompt_lower and "add" not in prompt_lower else "edit"
                 for i, part in enumerate(parts):
                     if part == "--project" and i + 1 < len(parts):
                         result["project"] = parts[i + 1].capitalize()
@@ -337,30 +307,168 @@ def main():
                         result["framework"] = parts[i + 1].capitalize()
                     elif part == "--features" and i + 1 < len(parts):
                         result["features"] = [f.capitalize() for f in parts[i + 1].strip('"').split(",")]
+                    elif part == "--platform" and i + 1 < len(parts):
+                         result["platform"] = parts[i + 1].capitalize()
+                # If intent is edit but no features are specified in strict format, assume general edit
+                if result["intent"] == "edit" and not result["features"]:
+                     result["features"].append("modyfikacja")
+
             except Exception as e:
                 logger.error(f"Error parsing strict format: {str(e)}")
+            # If strict format parsing was successful, return the result
+            if result["intent"] and result["project"] and (result["intent"] != "generate" or result["framework"]):
+                 return result, None
+
+
+        # Rozpoznanie języka i przetwarzanie spaCy
+        # Basic language detection - can be improved
+        doc = nlp_pl(prompt) if any(c in prompt for c in 'ąćęłńóśźż') else nlp_en(prompt)
+        prompt_text = doc.text.lower() # Use the processed text
+
+        # Słowa kluczowe dla intencji
+        generate_keywords = ["stwórz", "utwórz", "generuj", "create", "build", "make"]
+        edit_keywords = ["dodaj", "edytuj", "modyfikuj", "rozszerz", "add", "edit", "modify", "extend"]
+        deploy_keywords = ["wdróż", "deploy", "przygotuj do wdrożenia", "host"]
+        test_keywords = ["testuj", "test", "wygeneruj testy", "sprawdź jakość"]
+
+        # Rozpoznanie intencji
+        if any(keyword in prompt_text for keyword in generate_keywords):
+            result["intent"] = "generate"
+        elif any(keyword in prompt_text for keyword in edit_keywords):
+            result["intent"] = "edit"
+        elif any(keyword in prompt_text for keyword in deploy_keywords):
+            result["intent"] = "deploy"
+        elif any(keyword in prompt_text for keyword in test_keywords):
+            result["intent"] = "test"
+
+        # Rozpoznanie frameworka i platformy wdrożeniowej (używamy spaCy NER i dopasowania)
+        frameworks = ["next.js", "flask", "react", "django", "fastapi"]
+        platforms = ["vercel", "render", "heroku", "netlify"]
+
+        # Combine frameworks and platforms for entity matching
+        tech_terms = frameworks + platforms
+
+        # Use spaCy's PhraseMatcher for more flexible matching
+        from spacy.matcher import PhraseMatcher
+        matcher = PhraseMatcher(nlp_en.vocab if doc.lang_ == 'en' else nlp_pl.vocab) # Use appropriate vocab
+        patterns = [nlp_en.make_doc(text) if doc.lang_ == 'en' else nlp_pl.make_doc(text) for text in tech_terms]
+        matcher.add("TECH_TERM", patterns)
+
+        matches = matcher(doc)
+        for match_id, start, end in matches:
+            span = doc[start:end]
+            matched_text = span.text.lower()
+            if matched_text in frameworks:
+                result["framework"] = matched_text.capitalize()
+            elif matched_text in platforms:
+                result["platform"] = matched_text.capitalize()
+
+        # Wyciągnięcie nazwy projektu (używamy spaCy NER i zależności)
+        # Look for PROPN (proper noun) or NOUN entities near keywords like "projekt", "dla", "for"
+        if not result["project"]: # Only try to find project name if not found by strict format
+            for token in doc:
+                # Look for nouns or proper nouns that are objects of prepositions like "dla", "for", "to"
+                if token.dep_ in ("pobj", "dobj") and token.head.lemma_ in ("dla", "for", "to", "projekt", "project"):
+                    result["project"] = token.text.capitalize()
+                    break
+                # Look for proper nouns that might be the project name
+                if token.pos_ == "PROPN":
+                     result["project"] = token.text.capitalize()
+                     break
+
+        # Wyciągnięcie funkcji (używamy spaCy i dopasowania)
+        feature_keywords = [
+            "supabase", "uwierzytelnia", "autentykacja", "logowanie", "dashboard", "api",
+            "moduł notatek", "system płatności", "integracja stripe", "testy playwright",
+            "authentication", "login", "notes module", "payment system", "stripe integration", "playwright tests" # Add English features
+        ]
+        # Use PhraseMatcher for features as well
+        feature_matcher = PhraseMatcher(nlp_en.vocab if doc.lang_ == 'en' else nlp_pl.vocab)
+        feature_patterns = [nlp_en.make_doc(text) if doc.lang_ == 'en' else nlp_pl.make_doc(text) for text in feature_keywords]
+        feature_matcher.add("FEATURE", feature_patterns)
+
+        feature_matches = feature_matcher(doc)
+        for match_id, start, end in feature_matches:
+            span = doc[start:end]
+            matched_text = span.text.lower()
+            # Add feature if not already in the list
+            if matched_text.capitalize() not in result["features"]:
+                 result["features"].append(matched_text.capitalize())
+
 
         # Walidacja
         if not result["intent"]:
             return None, "Nie rozpoznano intencji. Użyj słów jak 'stwórz', 'dodaj', 'wdróż'. Przykład: 'Stwórz aplikację Todo z Next.js i Supabase.'"
         if result["intent"] in ["generate", "edit", "deploy"] and not result["project"]:
             return None, "Podaj nazwę projektu, np. 'dla TodoApp'. Przykład: 'Dodaj moduł notatek do TodoApp.'"
+        # Framework is only required for generate and edit intents
         if result["intent"] in ["generate", "edit"] and not result["framework"]:
-            return None, "Podaj framework, np. 'Next.js' lub 'Flask'. Przykład: 'Stwórz aplikację z Next.js.'"
+             return None, "Podaj framework, np. 'Next.js' lub 'Flask'. Przykład: 'Stwórz aplikację z Next.js.'"
+        # Platform is only required for deploy intent
+        if result["intent"] == "deploy" and not result["platform"]:
+             return None, "Podaj platformę wdrożeniową, np. 'Vercel' lub 'Render'. Przykład: 'Wdróż aplikację na Vercel.'"
+
 
         return result, None
 
     # Parsowanie promptu
-    parsed, error = parse_natural_prompt(args.prompt)
+    # Pass the loaded spaCy models to the parsing function
+    parsed, error = parse_natural_prompt(args.prompt, nlp_pl, nlp_en)
     if error:
         logger.error(error)
         print(f"Błąd: {error}")
-    parsed["project"] = args.project
-return
+        return # Exit if parsing failed
 
-    # Use args.project if parser didn't find a project name
-if parsed["project"] is None:
-parsed["project"] = args.project
+    # Use args.project if parser didn't find a project name (fallback)
+    if parsed["project"] is None and args.project:
+        parsed["project"] = args.project.capitalize()
+
+    # If project name is still missing after parsing and checking args, it's an error for certain intents
+    if parsed["intent"] in ["generate", "edit", "deploy"] and not parsed["project"]:
+         error_message = "Podaj nazwę projektu, np. 'dla TodoApp'. Przykład: 'Dodaj moduł notatek do TodoApp.'"
+         logger.error(error_message)
+         print(f"Błąd: {error_message}")
+         return # Exit if project name is missing and required
+
+    # Pobieranie kontekstu projektu (przeniesione do main)
+    def get_project_context(project_name, redis_client):
+        if redis_client is None or args.no_redis:
+             return {"files": [], "history": []}
+        context_key = f"context:{project_name}"
+        context = redis_client.get(context_key)
+        if context:
+            return json.loads(context)
+        return {"files": [], "history": []}
+
+    def save_project_context(project_name, context, redis_client):
+        if redis_client is None or args.no_redis:
+             return
+        context_key = f"context:{project_name}"
+        redis_client.setex(context_key, 3600, json.dumps(context))
+
+    def validate_context(project_name, context):
+        project_dir = os.path.join("projects", project_name)
+        if not os.path.exists(project_dir):
+            return False, "Projekt nie istnieje"
+        # This file listing might be slow for large projects. Consider caching or optimizing.
+        actual_files = [f for f in os.listdir(project_dir) if os.path.isfile(os.path.join(project_dir, f))]
+        if set(context.get("files", [])) != set(actual_files): # Handle case where "files" key might be missing
+            return False, "Kontekst nieaktualny"
+        return True, None
+
+    # Pobieranie kontekstu projektu
+    context = get_project_context(parsed["project"], redis_client)
+    context_str = f"Project context: Files: {', '.join(context.get('files', []))}, History: {', '.join(context.get('history', []))}" # Handle missing keys
+
+
+    # Walidacja kontekstu dla edycji
+    if parsed["intent"] == "edit":
+        valid, error = validate_context(parsed["project"], context)
+        if not valid:
+            logger.error(error)
+            print(f"Błąd: {error}")
+            return
+
 
     try:
         project_name = parsed["project"]
@@ -371,13 +479,23 @@ parsed["project"] = args.project
             logging.warning(f"Project directory {project_dir} does not exist. Creating...")
             os.makedirs(project_dir, exist_ok=True)
 
-        if args.edit:
-            if not args.changes:
-                raise ValueError("BŁĄD: --changes jest wymagany w trybie edycji.")
+        # Determine the task based on the parsed intent
+        if parsed["intent"] == "edit":
+            if not parsed["features"]: # In edit mode, features represent the changes
+                 # This case should ideally be handled by the parser validation, but as a fallback:
+                 error_message = "BŁĄD: W trybie edycji wymagane jest określenie zmian (features)."
+                 logger.error(error_message)
+                 print(f"Błąd: {error_message}")
+                 return
+
+            args.changes = ", ".join(parsed["features"]) # Use parsed features as changes
+            logging.info(f"Rozpoczynanie edycji projektu: {project_name} z zmianami: {args.changes}")
+            context["history"].append(f"Edited project with changes: {args.changes}")
+
 
             # Load agents and tasks from YAML (assuming agents.yaml and tasks.yaml exist and are correctly formatted)
-            agents_config = load_config_from_yaml('ai-web-factory/agents.yaml')
-            tasks_config = load_config_from_yaml('ai-web-factory/tasks.yaml')
+            agents_config = load_config_from_yaml('agents.yaml') # Corrected path
+            tasks_config = load_config_from_yaml('tasks.yaml') # Corrected path
 
             if not agents_config or not tasks_config:
                 raise Exception("Failed to load agents or tasks configuration from YAML.")
@@ -394,6 +512,8 @@ parsed["project"] = args.project
                          try:
                              # Ensure verbose is True for all agents loaded from YAML unless explicitly set to False
                              agent_data['verbose'] = agent_data.get('verbose', True)
+                             # Get temperature based on role
+                             agent_data['temperature'] = get_temperature_for_role(agent_role)
                              # Instantiate agent class dynamically
                              agent = agent_class(**agent_data)
                              crew_agents.append(agent)
@@ -401,9 +521,9 @@ parsed["project"] = args.project
                          except Exception as e:
                              logging.error(f"Error instantiating agent {agent_role} with data {agent_data}: {e}")
                              continue
-                         else:
-                             logging.warning(f"Unknown agent role or missing class in AGENT_CLASS_MAP for agent: {agent_role}. Skipping agent.")
-                             continue
+                    else: # Corrected indentation for the else block
+                         logging.warning(f"Unknown agent role or missing class in AGENT_CLASS_MAP for agent: {agent_role}. Skipping agent.")
+                         continue
 
 
             # Create tasks from config
@@ -493,6 +613,11 @@ parsed["project"] = args.project
                     except Exception as e:
                         logging.error(f"Failed to write file {file_path}: {str(e)}")
 
+            # Update context after editing
+            if os.path.exists(project_dir):
+                 context["files"] = [f for f in os.listdir(project_dir) if os.path.isfile(os.path.join(project_dir, f))]
+            save_project_context(project_name, context, redis_client)
+
 
             print(json.dumps({
                 "status": "success",
@@ -518,7 +643,7 @@ parsed["project"] = args.project
                 logging.warning("N8N_WEBHOOK_URL nie jest ustawiony w .env. Pomijam wywołanie webhooka.")
 
 
-        else: # Tryb generowania projektu
+        elif parsed["intent"] == "generate": # Tryb generowania projektu
             # Use parsed results if not provided by command line args or config
             if not args.framework and parsed["framework"]:
                 args.framework = parsed["framework"]
@@ -1064,16 +1189,264 @@ parsed["project"] = args.project
                 logging.warning("N8N_WEBHOOK_URL nie jest ustawiony w .env. Pomijam wywołanie webhooka o zakończeniu generowania.")
 
 
+        elif parsed["intent"] == "deploy":
+             # Use parsed results for deployment
+             if not parsed["project"] or not parsed["platform"]:
+                  raise ValueError("BŁĄD: W trybie wdrożenia wymagane są nazwa projektu i platforma.")
+
+             project_name = parsed["project"]
+             project_dir = os.path.join("projects", project_name)
+
+             if not os.path.exists(project_dir):
+                  raise FileNotFoundError(f"BŁĄD: Katalog projektu '{project_dir}' nie istnieje.")
+
+             logging.info(f"Przygotowanie projektu {project_name} do wdrożenia na platformie {parsed['platform']}")
+
+             # Task przygotowania do wdrożenia (np. generowanie plików konfiguracyjnych)
+             deploy_prep_task = Task(
+                 description=f"""
+                 Przygotuj projekt {project_name} w katalogu '{project_dir}' do wdrożenia na platformie hostingowej {parsed['platform']}.
+                 Wygeneruj niezbędne pliki konfiguracyjne (np. vercel.json, render.yaml) i instrukcje wdrożenia (INSTRUCTIONS.md).
+                 Upewnij się, że konfiguracja uwzględnia zmienne środowiskowe Supabase (SUPABASE_URL, SUPABASE_SERVICE_KEY).
+                 Zwróć pełną zawartość wygenerowanych plików konfiguracyjnych i instrukcji w formacie:
+                 --- <ścieżka_pliku_względem_katalogu_projektu> ---
+                 <zawartość>
+                 """,
+                 agent=deployment_agent, # Assuming DeploymentAgent handles this
+                 expected_output="Pełna zawartość wygenerowanych plików konfiguracyjnych i instrukcji w formacie '--- <ścieżka_pliku> --- <zawartość>'"
+             )
+
+             # Uruchomienie Crew dla przygotowania do wdrożenia
+             deploy_prep_crew = Crew(
+                 agents=[deployment_agent],
+                 tasks=[deploy_prep_task],
+                 process=Process.sequential,
+                 verbose=True,
+                 max_rpm=10
+             )
+
+             try:
+                 deploy_prep_result = deploy_prep_crew.kickoff()
+                 logging.debug(f"Deployment preparation result: {deploy_prep_result}")
+
+                 # Parsowanie i zapisywanie wygenerowanych plików konfiguracyjnych i instrukcji
+                 files_to_write_deploy = {}
+                 deploy_prep_result_str = str(deploy_prep_result)
+
+                 file_pattern_deploy = r'---\s*(\S+?)\s*---\s*(.*?)(?=(---|\Z))'
+                 file_matches_deploy = re.finditer(file_pattern_deploy, deploy_prep_result_str, re.DOTALL)
+                 for match in file_matches_deploy:
+                     file_name = match.group(1).strip()
+                     file_content = match.group(2).strip()
+                     files_to_write_deploy[file_name] = file_content
+                     logging.info(f"Parsed generated deployment content for {file_name}:\n{file_content[:100]}...")
+
+                 if not files_to_write_deploy:
+                     logging.warning("No deployment preparation files parsed from agent output.")
+                 else:
+                     for file_name, content in files_to_write_deploy.items():
+                         file_path = os.path.join(project_dir, file_name)
+                         try:
+                             os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                             with open(file_path, "w", encoding="utf-8") as f:
+                                 f.write(content)
+                             logging.info(f"Manually written generated deployment file: {file_path}")
+                         except Exception as e:
+                             logging.error(f"Failed to write generated deployment file {file_path}: {str(e)}")
+
+                 # Rzeczywiste wykonanie Git push i wdrożenia
+                 logging.info("Wykonuję Git push i wdrożenie...")
+                 # Używamy narzędzia execute_command
+                 git_commands = f"cd {project_dir} && git add . && git commit -m \"Update for deployment\"" # Assuming git init was done during generation
+                 logging.info(f"Wykonuję komendy Git: {git_commands}")
+                 print(f"<execute_command>\n<command>{git_commands}</command>\n</execute_command>")
+
+                 deploy_command = None
+                 if parsed["platform"] == "Vercel":
+                     deploy_command = f"cd {project_dir} && vercel --prod"
+                 elif parsed["platform"] == "Render":
+                     deploy_command = f"cd {project_dir} && render deploy"
+                 # Add support for other platforms
+
+                 if deploy_command:
+                     logging.info(f"Wykonuję komendę wdrożenia: {deploy_command}")
+                     print(f"<execute_command>\n<command>{deploy_command}</command>\n</execute_command>")
+                     deployment_url = "URL_PO_WDROZENIU_DO_PARSOWANIA" # Placeholder
+                 else:
+                     logging.warning(f"Brak zdefiniowanej komendy wdrożenia dla platformy: {parsed['platform']}")
+                     deployment_url = "N/A"
+
+                 # Zapisanie URL wdrożenia w bazie danych
+                 try:
+                     update_result = supabase.table("project_generations").update({
+                         "deployment_url": deployment_url,
+                         "status": "Deployed",
+                         "end_time": "now()"
+                     }).eq("project_name", project_name).execute()
+                     if update_result.data:
+                         logging.info(f"Zaktualizowano URL wdrożenia w Supabase: {update_result.data}")
+                     else:
+                         logging.warning(f"Nie udało się zaktualizować URL wdrożenia w Supabase: {update_result.error}")
+                 except Exception as db_error:
+                     logging.error(f"Błąd podczas zapisu URL wdrożenia w Supabase: {db_error}")
+
+
+                 print(json.dumps({
+                     "status": "deployment_attempt_finished",
+                     "project_name": project_name,
+                     "platform": parsed["platform"],
+                     "deployment_url": deployment_url
+                 }))
+
+                 # Webhook for deployment completion
+                 n8n_webhook_url = os.getenv("N8N_WEBHOOK_URL")
+                 if n8n_webhook_url:
+                     data_to_send = {
+                         "projectName": project_name,
+                         "platform": parsed["platform"],
+                         "status": "deployment_completed",
+                         "deploymentUrl": deployment_url
+                     }
+                     try:
+                         logging.info(f"Wywoływanie webhooka n8n (zakończenie wdrożenia) pod adresem: {n8n_webhook_url}")
+                         response = requests.post(n8n_webhook_url, json=data_to_send)
+                         response.raise_for_status()
+                         logging.info(f"Webhook n8n (zakończenie wdrożenia) wywołany pomyślnie. Status: {response.status_code}")
+                     except requests.exceptions.RequestException as e:
+                         logging.error(f"Błąd podczas wywoływania webhooka n8n (zakończenie wdrożenia): {e}")
+                 else:
+                     logging.warning("N8N_WEBHOOK_URL nie jest ustawiony w .env. Pomijam wywołanie webhooka o zakończeniu wdrożenia.")
+
+
+        elif parsed["intent"] == "test":
+             # Use parsed results for testing
+             if not parsed["project"]:
+                  raise ValueError("BŁĄD: W trybie testowania wymagana jest nazwa projektu.")
+
+             project_name = parsed["project"]
+             project_dir = os.path.join("projects", project_name)
+
+             if not os.path.exists(project_dir):
+                  raise FileNotFoundError(f"BŁĄD: Katalog projektu '{project_dir}' nie istnieje.")
+
+             logging.info(f"Generowanie testów dla projektu {project_name}")
+
+             # Task generowania testów
+             test_gen_task = Task(
+                 description=f"""
+                 Wygeneruj automatyczne testy dla projektu {project_name} w katalogu '{project_dir}'.
+                 Użyj odpowiednich narzędzi testowych dla frameworku {parsed['framework']} (np. Playwright dla Next.js, pytest dla Flask).
+                 Testy powinny pokrywać kluczowe funkcje, w tym integrację z Supabase (np. CRUD, uwierzytelnia
+                 """,
+                 agent=test_agent, # Assuming TestGeneratorAgent handles this
+                 expected_output="Pełna zawartość wygenerowanych plików testowych w formacie '--- <ścieżka_pliku> --- <zawartość>'"
+             )
+
+             # Uruchomienie Crew dla generowania testów
+             test_gen_crew = Crew(
+                 agents=[test_agent],
+                 tasks=[test_gen_task],
+                 process=Process.sequential,
+                 verbose=True,
+                 max_rpm=10
+             )
+
+             try:
+                 test_gen_result = test_gen_crew.kickoff()
+                 logging.debug(f"Test generation result: {test_gen_result}")
+
+                 # Parsowanie i zapisywanie wygenerowanych plików testowych
+                 files_to_write_tests = {}
+                 test_gen_result_str = str(test_gen_result)
+
+                 file_pattern_tests = r'---\s*(\S+?)\s*---\s*(.*?)(?=(---|\Z))'
+                 file_matches_tests = re.finditer(file_pattern_tests, test_gen_result_str, re.DOTALL)
+                 for match in file_matches_tests:
+                     file_name = match.group(1).strip()
+                     file_content = match.group(2).strip()
+                     files_to_write_tests[file_name] = file_content
+                     logging.info(f"Parsed generated test content for {file_name}:\n{file_content[:100]}...")
+
+                 if not files_to_write_tests:
+                     logging.warning("No test files parsed from test generation agent output.")
+                 else:
+                     for file_name, content in files_to_write_tests.items():
+                         file_path = os.path.join(project_dir, file_name)
+                         try:
+                             os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                             with open(file_path, "w", encoding="utf-8") as f:
+                                 f.write(content)
+                             logging.info(f"Manually written generated test file: {file_path}")
+                         except Exception as e:
+                             logging.error(f"Failed to write generated test file {file_path}: {str(e)}")
+
+                 # Uruchomienie testów (przykład dla Next.js z Playwright/Jest)
+                 logging.info("Uruchamianie testów automatycznych...")
+                 test_command = None
+                 if parsed["framework"] == "Next.js": # Use parsed framework
+                     test_command = f"cd {project_dir} && npm install && npm test"
+                 elif parsed["framework"] == "Flask": # Use parsed framework
+                     test_command = f"cd {project_dir} && pip install -r requirements.txt && pytest"
+                 # Add support for other frameworks
+
+                 if test_command:
+                     logging.info(f"Wykonuję komendę testową: {test_command}")
+                     print(f"<execute_command>\n<command>{test_command}</command>\n</execute_command>")
+                 else:
+                     logging.warning(f"Brak zdefiniowanej komendy testowej dla frameworku: {parsed['framework']}")
+
+                 print(json.dumps({
+                     "status": "test_generation_attempt_finished",
+                     "project_name": project_name,
+                     "framework": parsed["framework"],
+                     "test_command": test_command if test_command else "N/A"
+                 }))
+
+                 # Webhook for test generation completion
+                 n8n_webhook_url = os.getenv("N8N_WEBHOOK_URL")
+                 if n8n_webhook_url:
+                     data_to_send = {
+                         "projectName": project_name,
+                         "framework": parsed["framework"],
+                         "status": "test_generation_completed",
+                         "testCommand": test_command if test_command else "N/A"
+                     }
+                     try:
+                         logging.info(f"Wywoływanie webhooka n8n (zakończenie generowania testów) pod adresem: {n8n_webhook_url}")
+                         response = requests.post(n8n_webhook_url, json=data_to_send)
+                         response.raise_for_status()
+                         logging.info(f"Webhook n8n (zakończenie generowania testów) wywołany pomyślnie. Status: {response.status_code}")
+                     except requests.exceptions.RequestException as e:
+                         logging.error(f"Błąd podczas wywoływania webhooka n8n (zakończenie generowania testów): {e}")
+                 else:
+                     logging.warning("N8N_WEBHOOK_URL nie jest ustawiony w .env. Pomijam wywołanie webhooka o zakończeniu generowania testów.")
+
+
+            except Exception as e:
+                logging.error(f"Błąd podczas generowania lub uruchamiania testów: {e}")
+                # Nie przerywamy, błędy w testach mogą być normalne i mogą być naprawione później
+
+
+        else:
+             # Handle unknown intent
+             error_message = f"Nieznana intencja: {parsed['intent']}. Dostępne intencje: generate, edit, deploy, test."
+             logger.error(error_message)
+             print(f"Błąd: {error_message}")
+             return
+
+
     except Exception as e:
         logging.error(f"BŁĄD KRYTYCZNY: {str(e)}")
         print(json.dumps({"status": "failure", "message": str(e)}))
         # W przypadku błędu krytycznego, spróbuj zaktualizować status w bazie danych
         try:
+            # Attempt to get project_name if it was parsed before the error
+            project_name_for_db = parsed.get("project", "UnknownProject")
             update_result = supabase.table("project_generations").update({
                 "status": "Failed",
                 "end_time": "now()",
                 "notes": f"Critical Error: {str(e)}"
-            }).eq("project_name", project_name).execute()
+            }).eq("project_name", project_name_for_db).execute()
             if update_result.data:
                 logging.info(f"Zaktualizowano status błędu w Supabase: {update_result.data}")
             else:
@@ -1085,7 +1458,35 @@ parsed["project"] = args.project
 
 
 if __name__ == "__main__":
-    main()
+    # Load spaCy models once at the beginning
+    try:
+        nlp_pl = spacy.load("pl_core_news_sm")
+        nlp_en = spacy.load("en_core_web_sm")
+        logging.info("Loaded spaCy models.")
+    except Exception as e:
+        logging.error(f"Failed to load spaCy models: {e}")
+        # Depending on severity, you might want to exit or handle this gracefully
+        # For now, we'll let it proceed, but parsing might fail.
+        nlp_pl = None
+        nlp_en = None
+
+
+    # Połączenie z Redis (przeniesione tutaj, aby było dostępne w main)
+    redis_client = None # Initialize to None
+    try:
+        redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+        # Test connection
+        redis_client.ping()
+        logging.info("Connected to Redis.")
+    except redis.exceptions.ConnectionError as e:
+        logging.warning(f"Could not connect to Redis: {e}. Redis caching will be disabled.")
+        redis_client = None # Ensure redis_client is None if connection fails
+    except Exception as e:
+        logging.warning(f"An unexpected error occurred while connecting to Redis: {e}. Redis caching will be disabled.")
+        redis_client = None
+
+
+    main(nlp_pl, nlp_en, redis_client) # Pass spaCy models and redis_client to main
     # Usunięto test połączenia z Supabase, ponieważ nie jest potrzebny w tym miejscu.
 
     # Dodaj pętlę, aby utrzymać kontener przy życiu
